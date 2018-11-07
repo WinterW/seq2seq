@@ -118,6 +118,99 @@ tf.flags.DEFINE_boolean("log_device_placement", False,
 
 FLAGS = tf.flags.FLAGS
 
+def create_estimator_and_specs(output_dir):
+  sessionConfig = tf.ConfigProto(
+      log_device_placement=True,
+      allow_soft_placement=True
+  )
+  sessionConfig.gpu_options.allow_growth = FLAGS.gpu_allow_growth
+  sessionConfig.gpu_options.per_process_gpu_memory_fraction = FLAGS.gpu_memory_fraction
+  config = tf.estimator.RunConfig(
+      tf_random_seed=FLAGS.tf_random_seed,
+      save_checkpoints_secs=FLAGS.save_checkpoints_secs,
+      save_checkpoints_steps=FLAGS.save_checkpoints_steps,
+      session_config = sessionConfig,
+      keep_checkpoint_max=FLAGS.keep_checkpoint_max,
+      keep_checkpoint_every_n_hours=FLAGS.keep_checkpoint_every_n_hours)
+
+  train_options = training_utils.TrainOptions(
+      model_class=FLAGS.model,
+      model_params=FLAGS.model_params)
+  # On the main worker, save training options
+  if config.is_chief:
+    gfile.MakeDirs(output_dir)
+    train_options.dump(output_dir)
+
+  bucket_boundaries = None
+  if FLAGS.buckets:
+    bucket_boundaries = list(map(int, FLAGS.buckets.split(",")))
+
+  # Training data input pipeline
+  train_input_pipeline = input_pipeline.make_input_pipeline_from_def(
+      def_dict=FLAGS.input_pipeline_train,
+      mode=tf.contrib.learn.ModeKeys.TRAIN)
+
+  # Create training input function
+  train_input_fn = training_utils.create_input_fn(
+      pipeline=train_input_pipeline,
+      batch_size=FLAGS.batch_size,
+      bucket_boundaries=bucket_boundaries,
+      scope="train_input_fn")
+
+  # Development data input pipeline
+  dev_input_pipeline = input_pipeline.make_input_pipeline_from_def(
+      def_dict=FLAGS.input_pipeline_dev,
+      mode=tf.contrib.learn.ModeKeys.EVAL,
+      shuffle=False, num_epochs=1)
+
+  # Create eval input function
+  eval_input_fn = training_utils.create_input_fn(
+      pipeline=dev_input_pipeline,
+      batch_size=FLAGS.batch_size,
+      allow_smaller_final_batch=True,
+      scope="dev_input_fn")
+
+
+  def model_fn(features, labels, params, mode):
+    """Builds the model graph"""
+    model = _create_from_dict({
+        "class": train_options.model_class,
+        "params": train_options.model_params
+    }, models, mode=mode)
+    (predictions, loss, train_op) = model(features, labels, params)
+
+    # Create metrics
+    eval_metrics = {}
+    for dict_ in FLAGS.metrics:
+        metric = _create_from_dict(dict_, metric_specs)
+        eval_metrics[metric.name] = metric(features, labels, predictions)
+
+    return tf.estimator.EstimatorSpec(
+        mode=mode,
+        predictions=predictions,
+        loss=loss,
+        train_op=train_op,
+        eval_metric_ops=eval_metrics)
+
+  estimator = tf.estimator.Estimator(
+      model_fn=model_fn,
+      model_dir=output_dir,
+      config=config,
+      params=FLAGS.model_params)
+
+  # Create hooks
+  train_hooks = []
+  for dict_ in FLAGS.hooks:
+    hook = _create_from_dict(
+        dict_, hooks,
+        model_dir=estimator.model_dir,
+        run_config=config)
+    train_hooks.append(hook)
+
+  train_spec = tf.estimator.TrainSpec(input_fn=train_input_fn, max_steps=FLAGS.train_steps, hooks=train_hooks)
+  eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn)
+  return (estimator, train_spec, eval_spec)
+
 def create_experiment(output_dir):
   """
   Creates a new Experiment instance.
@@ -266,10 +359,13 @@ def main(_argv):
   if not FLAGS.input_pipeline_dev:
     raise ValueError("You must specify input_pipeline_dev")
 
-  learn_runner.run(
-      experiment_fn=create_experiment,
-      output_dir=FLAGS.output_dir,
-      schedule=FLAGS.schedule)
+  (estimator, train_spec, eval_spec) = create_estimator_and_specs(output_dir=FLAGS.output_dir)
+  tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
+
+  # learn_runner.run(
+  #     experiment_fn=create_experiment,
+  #     output_dir=FLAGS.output_dir,
+  #     schedule=FLAGS.schedule)
 
 
 if __name__ == "__main__":

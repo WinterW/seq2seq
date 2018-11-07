@@ -100,7 +100,8 @@ class TextMetricSpec(Configurable, MetricSpec):
         "separator": " ",
         "postproc_fn": "",
     }
-
+  def __call__(self, _inputs, labels, predictions):
+      return self.create_metric_ops(_inputs, labels, predictions)
   def create_metric_ops(self, _inputs, labels, predictions):
     """Creates (value, update_op) tensors
     """
@@ -223,7 +224,8 @@ class LogPerplexityMetricSpec(MetricSpec, Configurable):
   def name(self):
     """Name of the metric"""
     return "log_perplexity"
-
+  def __call__(self, _inputs, labels, predictions):
+    return self.create_metric_ops(_inputs, labels, predictions)
   def create_metric_ops(self, _inputs, labels, predictions):
     """Creates the metric op"""
     loss_mask = tf.sequence_mask(

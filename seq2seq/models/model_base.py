@@ -105,7 +105,7 @@ class ModelBase(Configurable):
     optimizer = self._create_optimizer()
     train_op = tf.contrib.layers.optimize_loss(
         loss=loss,
-        global_step=tf.contrib.framework.get_global_step(),
+        global_step=tf.train.get_global_step(),
         learning_rate=self.params["optimizer.learning_rate"],
         learning_rate_decay_fn=learning_rate_decay_fn,
         clip_gradients=self._clip_gradients,
